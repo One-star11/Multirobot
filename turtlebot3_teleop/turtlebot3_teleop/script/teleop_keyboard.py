@@ -79,6 +79,10 @@ class Turtle:
         self.y = 0.0
         self.theta = 0.0
         
+        # Object frame coordinates (initialized when all turtles are created)
+        self.x_obj = 0.0
+        self.y_obj = 0.0
+        
         self.target_linear_velocity = 0.0
         self.target_angular_velocity = 0.0
         self.target_theta = 0.0
@@ -99,6 +103,15 @@ class Turtle:
             lambda msg: self.pose_callback(msg), 
             self.qos
         )
+
+    def initialize_object_frame(self, xmid, ymid, base_angle):
+        """Initialize object frame coordinates based on current position and base_angle."""
+        # Convert to object frame (relative to midpoint of first two turtles)
+        x_rel = self.x - xmid
+        y_rel = self.y - ymid
+        # Rotate by base_angle to get object frame coordinates
+        self.x_obj = -x_rel * np.cos(-base_angle) + y_rel * np.sin(-base_angle)
+        self.y_obj = -x_rel * np.sin(-base_angle) - y_rel * np.cos(-base_angle)
 
     def set_target(self, linear_vel, target_theta, base_angle, control_angular_velocity):
         self.target_linear_velocity = linear_vel
@@ -297,6 +310,11 @@ CTRL-C to quit
             # Reset fixed_l to force recalculation
             self.fixed_l = None
             xmid, ymid = self.update_midpoint()
+            base_angle = np.arctan2(self.turtles[1].y - self.turtles[0].y, 
+                                  self.turtles[1].x - self.turtles[0].x)
+            # Initialize object frame coordinates for all turtles
+            for turtle in self.turtles:
+                turtle.initialize_object_frame(xmid, ymid, base_angle)
             for i in range(len(self.turtles)):
                 self.turtles[i].x_rel = self.turtles[i].x - xmid
                 self.turtles[i].y_rel = self.turtles[i].y - ymid
@@ -337,7 +355,7 @@ CTRL-C to quit
             if i >= 2:  # For additional turtles
                 print(f'Turtle {i+1} - l{i+1}={self.turtles[i].l:.2f}, pose_theta{i+1}={self.turtles[i].pose_theta/np.pi:.2f}pi')
         
-            print('controlling all robots, l =', self.fixed_l)
+            #print('controlling all robots, l =', self.fixed_l)
         return xmid, ymid
 
     def update_turtles(self):
@@ -408,6 +426,7 @@ CTRL-C to quit
         else:
             print('control_angular_velocity =', control_angular_velocity)
             
+            # Calculate rotation center
             if ((control_angular_velocity < 0 and ((self.theta_steer >= 0 and self.theta_steer < np.pi/2) or (self.theta_steer <= 2*np.pi and self.theta_steer > 3/2*np.pi)) and control_linear_velocity > 0) or\
                 (control_angular_velocity > 0 and ((self.theta_steer >= 0 and self.theta_steer < np.pi/2) or (self.theta_steer <= 2*np.pi and self.theta_steer > 3/2*np.pi)) and control_linear_velocity < 0)): #R_D
                 print('R_D')#OK
@@ -415,6 +434,7 @@ CTRL-C to quit
                 psi = self.theta_steer - np.pi/2
                 x = rho * np.cos(psi)
                 y = rho * np.sin(psi)
+                
                 target_theta1 = np.arctan2(y, x - self.turtles[0].l) + np.pi/2
                 target_theta2 = np.arctan2(y, x + self.turtles[1].l) + 3*np.pi/2
                 target_vel1 = -control_angular_velocity * (self.fixed_l) / np.sin(target_theta2 - target_theta1) * np.cos(target_theta2)
@@ -443,6 +463,7 @@ CTRL-C to quit
                 psi = self.theta_steer + np.pi/2
                 x = rho * np.cos(psi)
                 y = rho * np.sin(psi)
+                
                 target_theta1 = np.arctan2(y, x - self.turtles[0].l) - np.pi/2
                 target_theta2 = np.arctan2(y, x + self.turtles[1].l) - np.pi/2
                 target_vel1 = -control_angular_velocity * (self.fixed_l) / np.sin(target_theta2 - target_theta1) * np.cos(target_theta2)
@@ -470,6 +491,7 @@ CTRL-C to quit
                 psi = self.theta_steer + np.pi/2
                 x = rho * np.cos(psi)
                 y = rho * np.sin(psi)
+                
                 target_theta1 = np.arctan2(y, x - self.turtles[0].l) - np.pi/2
                 target_theta2 = np.arctan2(y, x + self.turtles[1].l) - np.pi/2
                 target_vel1 = -control_angular_velocity * (self.fixed_l) / np.sin(target_theta2 - target_theta1) * np.cos(target_theta2)
@@ -497,6 +519,7 @@ CTRL-C to quit
                 psi = self.theta_steer - np.pi/2
                 x = rho * np.cos(psi)
                 y = rho * np.sin(psi)
+                
                 target_theta1 = np.arctan2(y, x - self.turtles[0].l) + np.pi/2
                 target_theta2 = np.arctan2(y, x + self.turtles[1].l) + np.pi/2
                 target_vel1 = -control_angular_velocity * (self.fixed_l) / np.sin(target_theta2 - target_theta1) * np.cos(target_theta2)
@@ -516,6 +539,24 @@ CTRL-C to quit
                     ) + np.pi/2
                     target_veli = -ri * control_angular_velocity
                     self.turtles[i].set_target(target_veli, target_thetai, base_angle, control_angular_velocity)
+            
+            # Check if rotation center is inside polytope and adjust velocities if needed
+            if np.abs(control_angular_velocity) > 1e-2:  # Only check for rotation cases
+                # is_inside = self.is_rotation_center_inside_polytope(x, y, base_angle)
+                # if is_inside:
+                for i in range(len(self.turtles)):
+                    # Calculate dot product between normal vector (x,y) and vector from (x,y) to robot
+                    # If dot product is positive, robot is in the half-plane we want
+                    dot_product = x * (self.turtles[i].x_obj - x) + y * (self.turtles[i].y_obj - y)
+                    print(f"Dot product for turtle {i+1}: {dot_product:.2f}")
+                    if dot_product > 0:  # Robot is in the desired half-plane
+                        print(f"Turtle {i+1} is in the desired half-plane")
+                        # Get current target values
+                        current_target = self.turtles[i].target_theta    
+                        current_vel = self.turtles[i].target_linear_velocity
+                        
+                        # Update target values
+                        self.turtles[i].set_target(-current_vel, current_target + np.pi, 0, control_angular_velocity)
 
     def publish_midpoint_and_desired(self, lin_vel, ang_vel, base_angle):
         # Publish midpoint pose
@@ -605,6 +646,83 @@ CTRL-C to quit
             return constrain(velocity, -BURGER_MAX_ANG_VEL, BURGER_MAX_ANG_VEL)
         else:
             return constrain(velocity, -WAFFLE_MAX_ANG_VEL, WAFFLE_MAX_ANG_VEL)
+
+    # def compute_convex_hull(self, points):
+    #     """Compute the convex hull of a set of points using Graham scan algorithm."""
+    #     def orientation(p, q, r):
+    #         """Return positive if p-q-r are clockwise, negative if counterclockwise, 0 if collinear."""
+    #         val = (q[1] - p[1]) * (r[0] - q[0]) - (q[0] - p[0]) * (r[1] - q[1])
+    #         if abs(val) < 1e-10:
+    #             return 0
+    #         return 1 if val > 0 else 2
+
+    #     def distance(p, q):
+    #         """Return the squared distance between points p and q."""
+    #         return (p[0] - q[0])**2 + (p[1] - q[1])**2
+
+    #     n = len(points)
+    #     if n < 3:
+    #         return points
+
+    #     # Find the point with lowest y-coordinate (and leftmost if tied)
+    #     start = min(range(n), key=lambda i: (points[i][1], points[i][0]))
+        
+    #     # Sort points by polar angle with start point
+    #     def polar_angle(p):
+    #         return np.arctan2(p[1] - points[start][1], p[0] - points[start][0])
+        
+    #     sorted_points = [points[start]] + sorted(
+    #         [p for i, p in enumerate(points) if i != start],
+    #         key=lambda p: (polar_angle(p), distance(points[start], p))
+    #     )
+        
+    #     # Build convex hull
+    #     hull = [sorted_points[0], sorted_points[1]]
+    #     for i in range(2, len(sorted_points)):
+    #         while len(hull) >= 2 and orientation(hull[-2], hull[-1], sorted_points[i]) != 2:
+    #             hull.pop()
+    #         hull.append(sorted_points[i])
+        
+    #     return hull
+
+    # def is_rotation_center_inside_polytope(self, x, y, base_angle):
+    #     """Check if the rotation center (x,y) is inside the polytope formed by the turtles.
+    #     x, y are in object frame, and we'll check in object frame since relative positions don't change."""
+    #     # Get all turtle positions in object frame (already stored)
+    #     points = np.array([[turtle.x_obj, turtle.y_obj] for turtle in self.turtles])
+        
+    #     # Compute convex hull
+    #     vertices = self.compute_convex_hull(points)
+        
+    #     print("Vertices of convex hull in object frame:")
+    #     for i, v in enumerate(vertices):
+    #         print(f"Vertex {i}: ({v[0]:.2f}, {v[1]:.2f})")
+    #     print(f"Rotation center in object frame: ({x:.2f}, {y:.2f})")
+        
+    #     # Check if point is inside using ray casting algorithm
+    #     inside = False
+    #     j = len(vertices) - 1
+        
+    #     for i in range(len(vertices)):
+    #         # Check if point is on vertex
+    #         if abs(vertices[i][0] - x) < 1e-10 and abs(vertices[i][1] - y) < 1e-10:
+    #             print("Point is on vertex")
+    #             return True
+                
+    #         # Check if point is on edge
+    #         if (vertices[i][1] != vertices[j][1]) and \
+    #            (min(vertices[i][1], vertices[j][1]) < y < max(vertices[i][1], vertices[j][1])):
+    #             x_intersect = vertices[i][0] + (vertices[j][0] - vertices[i][0]) * \
+    #                          (y - vertices[i][1]) / (vertices[j][1] - vertices[i][1])
+    #             if abs(x - x_intersect) < 1e-10:
+    #                 print("Point is on edge")
+    #                 return True
+    #             if x < x_intersect:
+    #                 inside = not inside
+    #         j = i
+            
+    #     print(f"Point is {'inside' if inside else 'outside'} the polytope")
+    #     return inside
 
 def constrain(input_vel, low_bound, high_bound):
     if input_vel < low_bound:
